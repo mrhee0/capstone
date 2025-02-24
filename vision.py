@@ -5,7 +5,7 @@ import numpy as np
 class QRScanner:
     def scan_qr_code():
         # Open the webcam (change 0 if you have multiple cameras)
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
         cap.set(3, 1920) # Set width
         cap.set(4, 1080) # Set height
 
