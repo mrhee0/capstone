@@ -1,5 +1,6 @@
 import cv2
 from pyzbar.pyzbar import decode
+from pyzbar.pyzbar import ZBarSymbol
 import numpy as np
 import time
 from collections import deque
@@ -33,17 +34,34 @@ class QRScanner:
         center_y = sum(y_coords) / len(y_coords)
         
         return (center_x, center_y)
+        
+    def calculate_box_size(self, bbox):
+        """Calculate the size (area) of a bounding box in pixels."""
+        if not bbox or len(bbox) != 4:
+            return 0
+        x_coords = [p[0] for p in bbox]
+        y_coords = [p[1] for p in bbox]
+        
+        width1 = np.sqrt((x_coords[1] - x_coords[0])**2 + (y_coords[1] - y_coords[0])**2)
+        width2 = np.sqrt((x_coords[2] - x_coords[3])**2 + (y_coords[2] - y_coords[3])**2)
+        avg_width = (width1 + width2) / 2
+        height1 = np.sqrt((x_coords[3] - x_coords[0])**2 + (y_coords[3] - y_coords[0])**2)
+        height2 = np.sqrt((x_coords[2] - x_coords[1])**2 + (y_coords[2] - y_coords[1])**2)
+        avg_height = (height1 + height2) / 2
+        return {
+            "width": avg_width,
+            "height": avg_height,
+            "area": avg_width * avg_height
+        }
     
     def calculate_speed(self):
         """Calculate speed from position history in pixels/frame."""
         if len(self.position_history) < 2:
             return 0.0, None, "px/frame"
-            
         distances = []
         for i in range(1, len(self.position_history)):
             prev_pos = self.position_history[i-1]
             curr_pos = self.position_history[i]
-            # Calculate Euclidean distance
             dx = curr_pos[0] - prev_pos[0]
             dy = curr_pos[1] - prev_pos[1]
             distance = np.sqrt(dx*dx + dy*dy)
@@ -72,17 +90,168 @@ class QRScanner:
             direction = None
         return avg_speed_px, direction, "px/frame"
     
-    def scan_and_track(self, display=True, exit_key='q', min_frames=10):
+    def calibrate(self, known_qr_size_cm=7, height_difference_cm=None, display=True):
         """
-        Continuously scan for QR codes and track their speed.
+        Calibrate the system to determine camera distance to conveyor belt and pixel:cm ratio.
+        
+        Args:
+            known_qr_size_cm: The actual size of the QR code in centimeters
+            height_difference_cm: Height difference when raising the QR code above the belt
+            display: Whether to display the video feed during calibration
+            
+        Returns:
+            Dictionary with calibration results (distance_to_belt, pixel_per_cm)
+        """
+        if height_difference_cm is None or height_difference_cm <= 0:
+            print("Error: You must provide a positive height difference in centimeters")
+            return None
+            
+        # Open the webcam
+        cap = cv2.VideoCapture(self.camera_id, cv2.CAP_AVFOUNDATION)
+        cap.set(3, self.width)
+        cap.set(4, self.height)
+        if not cap.isOpened():
+            print("Failed to open camera")
+            return None
+        
+        calibration_results = {
+            "distance_to_belt_cm": None,
+            "pixels_per_cm": None,
+            "focal_length_px": None
+        }
+        
+        # Step 1: Measure QR code on the belt
+        belt_measurement = self._capture_qr_measurement(
+            cap, 
+            "Place QR code on the conveyor belt, then press any key...",
+            "QR on belt",
+            display
+        )
+        if not belt_measurement:
+            cap.release()
+            cv2.destroyAllWindows()
+            print("Failed to detect QR code on the belt")
+            return None
+        print(f"QR on belt size: {belt_measurement['width']:.2f} x {belt_measurement['height']:.2f} pixels")
+        
+        # Step 2: Measure QR code at predefined height above belt
+        raised_message = f"Raise QR code {height_difference_cm}cm above belt, then press any key..."
+        raised_measurement = self._capture_qr_measurement(
+            cap, 
+            raised_message,
+            "QR raised",
+            display
+        )
+        if not raised_measurement:
+            cap.release()
+            cv2.destroyAllWindows()
+            print("Failed to detect QR code at raised position")
+            return None
+        print(f"QR at raised position size: {raised_measurement['width']:.2f} x {raised_measurement['height']:.2f} pixels")
+        cap.release()
+        if display:
+            cv2.destroyAllWindows()
+        
+        # Calculate calibration values (pinhole camera model):
+        belt_size_px = (belt_measurement['width'] + belt_measurement['height']) / 2
+        raised_size_px = (raised_measurement['width'] + raised_measurement['height']) / 2
+        size_ratio = raised_size_px / belt_size_px
+        distance_to_belt = height_difference_cm / (1 - (belt_size_px/raised_size_px))
+        focal_length = (belt_size_px * distance_to_belt) / known_qr_size_cm
+        
+        pixels_per_cm = belt_size_px / known_qr_size_cm
+        calibration_results["distance_to_belt_cm"] = round(distance_to_belt, 2)
+        calibration_results["pixels_per_cm"] = round(pixels_per_cm, 2)
+        calibration_results["focal_length_px"] = round(focal_length, 2)
+        
+        print("\nCalibration Results:")
+        print(f"Camera distance to conveyor belt: {calibration_results['distance_to_belt_cm']} cm")
+        print(f"Pixel to cm ratio at belt level: {calibration_results['pixels_per_cm']} pixels/cm")
+        print(f"Camera focal length: {calibration_results['focal_length_px']} pixels")
+        return calibration_results
+    
+    def _capture_qr_measurement(self, cap, prompt_message, window_name, display):
+        """Helper method to capture a QR code measurement during calibration."""
+        print(prompt_message)
+        if display:
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        
+        # Wait for key press while showing camera feed
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to grab frame")
+                return None
+            if display:
+                cv2.putText(frame, prompt_message, (30, 30), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                cv2.imshow(window_name, frame)
+                if cv2.waitKey(1) & 0xFF != 0xFF:
+                    break
+            else:
+                time.sleep(0.5)
+                break
+        
+        # Capture QR code
+        qr_detected = False
+        measurement = None
+        attempts = 0
+        max_attempts = 30
+        while not qr_detected and attempts < max_attempts:
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to grab frame")
+                return None
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            qr_codes = decode(gray, symbols=[ZBarSymbol.QRCODE])
+
+            for qr in qr_codes:
+                pts = qr.polygon
+                if len(pts) == 4:
+                    qr_detected = True
+                    qr_bbox = [(p.x, p.y) for p in pts]
+                    center = self.calculate_center(qr_bbox)
+                    measurement = self.calculate_box_size(qr_bbox)
+                    if display:
+                        # Draw detected QR code
+                        cv2.polylines(frame, [np.array(qr_bbox, dtype=np.int32)], True, (0, 255, 0), 3)
+                        size_text = f"Size: {measurement['width']:.1f} x {measurement['height']:.1f} px"
+                        cv2.putText(frame, size_text, (int(center[0]), int(center[1]) - 20), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        cv2.putText(frame, "QR code detected!", (30, 60), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                        cv2.imshow(window_name, frame)
+                        cv2.waitKey(500)
+                    break
+            if not qr_detected and display:
+                cv2.putText(frame, "Searching for QR code...", (30, 60), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
+                cv2.imshow(window_name, frame)
+                cv2.waitKey(1)
+            attempts += 1
+        if not qr_detected:
+            print("Could not detect QR code")
+            return None
+        return measurement
+    
+    def scan_and_track(self, display=True, exit_key='q', min_frames=10, 
+                      reliable_frames=15, min_speed=0.5, max_variance=0.2,
+                      max_frames_without_detection=3):
+        """
+        Scan for QR codes and track their speed, returning once reliable data is collected.
         
         Args:
             display: Whether to display the video feed
             exit_key: Key to press to exit the loop
             min_frames: Minimum frames to collect before calculating speed
+            reliable_frames: Number of consecutive frames needed for reliable tracking
+            min_speed: Minimum speed (px/frame) to consider the object as moving
+            max_variance: Maximum allowed variance in speed measurements
+            max_frames_without_detection: Maximum allowed consecutive frames without detection
+                                         before resetting the consecutive detection counter
             
         Returns:
-            Dictionary with QR data, speed, and direction information
+            Dictionary with QR data, speed, direction, final position, and box size information
         """
         # Open the webcam
         cap = cv2.VideoCapture(self.camera_id, cv2.CAP_AVFOUNDATION)
@@ -96,10 +265,23 @@ class QRScanner:
             "qr_data": None,
             "speed": 0.0,
             "direction": None,
-            "unit": "px/s"
+            "unit": "px/frame",
+            "final_position": None,
+            "box_size": None
         }
         self.position_history.clear()
         self.timestamp_history.clear()
+        
+        # Tracking reliability metrics
+        consecutive_detections = 0
+        frames_without_detection = 0
+        max_consecutive_detections = 0
+        speed_measurements = []
+        tracking_stable = False
+        box_sizes = []
+        last_known_center = None
+        last_known_bbox = None
+        
         try:
             while True:
                 ret, frame = cap.read()
@@ -108,35 +290,52 @@ class QRScanner:
                     break
                 current_time = time.time()
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                qr_codes = decode(gray)
+                qr_codes = decode(gray, symbols=[ZBarSymbol.QRCODE])
+                qr_detected = False
                 
                 # Process QR codes
                 for qr in qr_codes:
+                    qr_detected = True
+                    frames_without_detection = 0
                     qr_data = qr.data.decode('utf-8')
                     results["qr_data"] = qr_data
                     self.last_qr_data = qr_data
                     pts = qr.polygon
+                    
                     if len(pts) == 4:
                         qr_bbox = [(p.x, p.y) for p in pts]
+                        last_known_bbox = qr_bbox  # Save this for when detection fails
                         center = self.calculate_center(qr_bbox)
-                        
+                        last_known_center = center  # Save this for when detection fails
+                        box_size = self.calculate_box_size(qr_bbox)
+                        box_sizes.append(box_size)
+                        results["final_position"] = center
+                        if box_sizes:
+                            avg_width = sum(bs["width"] for bs in box_sizes) / len(box_sizes)
+                            avg_height = sum(bs["height"] for bs in box_sizes) / len(box_sizes)
+                            avg_area = sum(bs["area"] for bs in box_sizes) / len(box_sizes)
+                            results["box_size"] = {
+                                "width": round(avg_width, 2),
+                                "height": round(avg_height, 2),
+                                "area": round(avg_area, 2)
+                            }
                         if center:
-                            # Add to position history
                             self.position_history.append(center)
                             self.timestamp_history.append(current_time)
-                            
-                            # Calculate speed if we have enough data points
                             if len(self.position_history) >= min_frames:
                                 speed, direction, unit = self.calculate_speed()
                                 results["speed"] = round(speed, 2)
                                 results["direction"] = direction
                                 results["unit"] = unit
+                                speed_measurements.append(speed)
+                                if len(speed_measurements) > reliable_frames:
+                                    speed_measurements.pop(0)
                         
-                        # Draw QR code boundary
+                        # Draw QR bounding box
                         if display:
                             cv2.polylines(frame, [np.array(qr_bbox, dtype=np.int32)], True, (0, 255, 0), 3)
                             if center and "speed" in results:
-                                # Draw speed information
+                                # Draw speed info
                                 speed_text = f"Speed: {results['speed']} {results['unit']}"
                                 cv2.putText(frame, speed_text, (int(center[0]), int(center[1]) - 20), 
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
@@ -145,15 +344,76 @@ class QRScanner:
                                 data_text = f"QR: {qr_data}"
                                 cv2.putText(frame, data_text, (int(center[0]), int(center[1]) - 50), 
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                                
-                                # Draw movement trail
-                                if len(self.position_history) >= 2:
-                                    points = [np.array([int(x), int(y)]) for x, y in self.position_history]
-                                    for i in range(1, len(points)):
-                                        cv2.line(frame, tuple(points[i-1]), tuple(points[i]), (255, 0, 0), 2)
+                                if "box_size" in results:
+                                    size_text = f"Size: {results['box_size']['width']:.1f} x {results['box_size']['height']:.1f} px"
+                                    cv2.putText(frame, size_text, (int(center[0]), int(center[1]) - 110), 
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                
+                # No current detection but we have a recent detection
+                if not qr_detected and last_known_center and frames_without_detection < max_frames_without_detection:
+                    frames_without_detection += 1
+                    if display and last_known_bbox:
+                        cv2.polylines(frame, [np.array(last_known_bbox, dtype=np.int32)], True, (0, 165, 255), 3)
+                        center_x, center_y = last_known_center
+                        cv2.putText(frame, "Last known position", (int(center_x), int(center_y) - 140), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                        cv2.putText(frame, f"Frames without detection: {frames_without_detection}/{max_frames_without_detection}", 
+                                    (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                elif not qr_detected:
+                    frames_without_detection += 1
+                
+                # Update consecutive detection counter
+                if qr_detected:
+                    consecutive_detections += 1
+                    max_consecutive_detections = max(max_consecutive_detections, consecutive_detections)
+                elif frames_without_detection >= max_frames_without_detection:
+                    consecutive_detections = 0
+                
+                # Display tracking statistics
+                if display:
+                    count_text = f"Consecutive detections: {consecutive_detections}/{reliable_frames} (Max: {max_consecutive_detections})"
+                    cv2.putText(frame, count_text, (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    
+                    # Status of tracking stability
+                    if tracking_stable:
+                        stability_text = "Tracking: STABLE"
+                        color = (0, 255, 0)
+                    else:
+                        stability_text = f"Tracking: ACQUIRING"
+                        color = (0, 165, 255)
+                    cv2.putText(frame, stability_text, (30, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                    
+                    # Movement trail
+                    if len(self.position_history) >= 2:
+                        points = [np.array([int(x), int(y)]) for x, y in self.position_history]
+                        for i in range(1, len(points)):
+                            cv2.line(frame, tuple(points[i-1]), tuple(points[i]), (255, 0, 0), 2)
+                
+                # Check tracking mean/variance/stability
+                if (consecutive_detections >= reliable_frames or 
+                    max_consecutive_detections >= reliable_frames*2) and len(speed_measurements) >= min(reliable_frames, len(self.position_history)):
+                    if speed_measurements:
+                        mean_speed = sum(speed_measurements) / len(speed_measurements)
+                        if len(speed_measurements) > 1:
+                            variance = sum((s - mean_speed) ** 2 for s in speed_measurements) / len(speed_measurements)
+                            normalized_variance = variance / (mean_speed ** 2) if mean_speed > 0 else float('inf')
+                            if max_consecutive_detections >= reliable_frames*2:
+                                tracking_stable = (mean_speed >= min_speed * 0.5 and normalized_variance <= max_variance * 2)
+                            else:
+                                tracking_stable = (mean_speed >= min_speed and normalized_variance <= max_variance)
+                            
+                            # Return once stable tracking is achieved
+                            if tracking_stable:
+                                if display:
+                                    frame_copy = frame.copy()
+                                    cv2.putText(frame_copy, "TRACKING STABLE - RETURNING", (30, 120), 
+                                              cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                                    cv2.imshow('QR Code Scanner', frame_copy)
+                                break
+                
                 # Display the frame
                 if display:
-                    cv2.imshow('QR Code Speed Tracker', frame)
+                    cv2.imshow('QR Code Scanner', frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord(exit_key):
                         break
