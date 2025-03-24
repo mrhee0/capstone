@@ -16,6 +16,8 @@ def compute_center(bbox):
         return center_x, center_y
     return None
 
+# Send 5 comma-separated commands (turret angle, lift1 angle, lift2 angle, servo (never changed), vacuum)
+# Changes: don't send servo value, curently 0-180 degrees corresponds to 0-4 command
 def main():
     # Initialize kinematics with example arm lengths.
     # You may need to adjust L1 and L2 based on your actual robotic arm configuration.

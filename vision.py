@@ -236,7 +236,7 @@ class QRScanner:
     
     def scan_and_track(self, display=True, exit_key='q', min_frames=10, 
                       reliable_frames=15, min_speed=0.5, max_variance=0.2,
-                      max_frames_without_detection=3):
+                      max_frames_without_detection=3, calibration=None):
         """
         Scan for QR codes and track their speed, returning once reliable data is collected.
         
@@ -249,6 +249,7 @@ class QRScanner:
             max_variance: Maximum allowed variance in speed measurements
             max_frames_without_detection: Maximum allowed consecutive frames without detection
                                          before resetting the consecutive detection counter
+            calibration: Calibration results from the calibrate() method (optional)
             
         Returns:
             Dictionary with QR data, speed, direction, final position, and box size information
@@ -267,7 +268,8 @@ class QRScanner:
             "direction": None,
             "unit": "px/frame",
             "final_position": None,
-            "box_size": None
+            "box_size": None,
+            "height_above_belt": None
         }
         self.position_history.clear()
         self.timestamp_history.clear()
@@ -319,6 +321,19 @@ class QRScanner:
                                 "height": round(avg_height, 2),
                                 "area": round(avg_area, 2)
                             }
+                            if calibration and calibration.get("distance_to_belt_cm") and calibration.get("focal_length_px"):
+                                width_cm = avg_width / calibration["pixels_per_cm"]
+                                height_cm = avg_height / calibration["pixels_per_cm"]
+                                results["real_world_size"] = {
+                                    "width": round(width_cm, 2),
+                                    "height": round(height_cm, 2),
+                                    "area": round(width_cm * height_cm, 2)
+                                }
+                                known_qr_size_cm = calibration.get("known_qr_size_cm", width_cm)
+                                qr_avg_size_px = (avg_width + avg_height) / 2
+                                distance_to_qr = (calibration["focal_length_px"] * known_qr_size_cm) / qr_avg_size_px
+                                height_above_belt = calibration["distance_to_belt_cm"] - distance_to_qr
+                                results["height_above_belt"] = round(height_above_belt, 2)
                         if center:
                             self.position_history.append(center)
                             self.timestamp_history.append(current_time)
@@ -327,6 +342,10 @@ class QRScanner:
                                 results["speed"] = round(speed, 2)
                                 results["direction"] = direction
                                 results["unit"] = unit
+                                if calibration and calibration.get("pixels_per_cm"):
+                                    speed_cm = speed / calibration["pixels_per_cm"]
+                                    results["real_world_speed"] = round(speed_cm, 2)
+                                    results["real_world_speed_unit"] = "cm/frame"
                                 speed_measurements.append(speed)
                                 if len(speed_measurements) > reliable_frames:
                                     speed_measurements.pop(0)
@@ -348,6 +367,10 @@ class QRScanner:
                                     size_text = f"Size: {results['box_size']['width']:.1f} x {results['box_size']['height']:.1f} px"
                                     cv2.putText(frame, size_text, (int(center[0]), int(center[1]) - 110), 
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                                    if "height_above_belt" in results and results["height_above_belt"] is not None:
+                                        height_text = f"Height: {results['height_above_belt']:.1f} cm"
+                                        cv2.putText(frame, height_text, (int(center[0]), int(center[1]) - 140), 
+                                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
                 # No current detection but we have a recent detection
                 if not qr_detected and last_known_center and frames_without_detection < max_frames_without_detection:

@@ -19,20 +19,22 @@ if __name__ == "__main__":
     )
     
     if results and results["qr_data"]:
+        print(f"\nResults:")
         print(f"QR Data: {results['qr_data']}")
         print(f"Speed: {results['speed']} {results['unit']}")
-        if results["direction"]:
-            print(f"Direction: ({results['direction'][0]:.2f}, {results['direction'][1]:.2f})")
         if results["final_position"]:
             print(f"Final Position: ({results['final_position'][0]:.2f}, {results['final_position'][1]:.2f})")
+        if "real_world_speed" in results and results["real_world_speed"] is not None:
+            print(f"Real-world speed: {results['real_world_speed']} {results['real_world_speed_unit']}")
+        if results["direction"]:
+            print(f"Direction: ({results['direction'][0]:.2f}, {results['direction'][1]:.2f})")
         if results["box_size"]:
-            print(f"Box Size: {results['box_size']['width']:.2f} × {results['box_size']['height']:.2f} px")
-            print(f"Box Area: {results['box_size']['area']:.2f} px²")
-            
-            # If calibrated, show real-world measurements
-            if calibration and calibration["pixels_per_cm"]:
-                width_cm = results["box_size"]["width"] / calibration["pixels_per_cm"]
-                height_cm = results["box_size"]["height"] / calibration["pixels_per_cm"]
-                print(f"Real-world size: {width_cm:.2f} × {height_cm:.2f} cm")
+            print(f"Box Size (pixels): {results['box_size']['width']:.2f} × {results['box_size']['height']:.2f} px")
+            print(f"Box Area (pixels): {results['box_size']['area']:.2f} px²")
+        if results["real_world_size"]:
+            print(f"Real-world size: {results['real_world_size']['width']:.2f} × {results['real_world_size']['height']:.2f} cm")
+            print(f"Real-world area: {results['real_world_size']['area']:.2f} cm²")
+        if results["height_above_belt"] is not None:
+            print(f"Height above conveyor belt: {results['height_above_belt']:.2f} cm")
     else:
         print("No QR code detected")
