@@ -1,76 +1,112 @@
 # main.py
 import time
 import serial
+import math
 from kinematics import Kinematics
 from vision import QRScanner
 import numpy as np
 import cv2
 
-def compute_center(bbox):
+def predict_future_position(results, camera_to_robot_distance=30):
     """
-    Given a list of (x, y) tuples, compute the center point.
+    Predict where the QR code will be after a specified time.
+    
+    Args:
+        results: Dictionary from scan_and_track containing position, speed, and direction
+        camera_to_robot_distance: Distance in cm from camera to robot arm base
+        
+    Returns:
+        (x_time, y, z) tuple in robot's reference frame
+        x_time equals number of seconds it takes for the box to reach the robot's idle position
     """
-    if bbox and len(bbox) > 0:
-        center_x = sum([pt[0] for pt in bbox]) / len(bbox)
-        center_y = sum([pt[1] for pt in bbox]) / len(bbox)
-        return center_x, center_y
+    if "real_world_speed" in results and results["real_world_speed"] is not None and results["height_above_belt"] is not None:
+        _, pos_y = results["final_position"]
+        robot_x_time = camera_to_robot_distance / results["real_world_speed"]
+        robot_y = pos_y
+        robot_z = results["height_above_belt"]
+        return (robot_x_time, robot_y, robot_z)
+    print("Cannot predict real-world position: calibration data missing")
     return None
 
 # Send 5 comma-separated commands (turret angle, lift1 angle, lift2 angle, servo (never changed), vacuum)
 # Changes: don't send servo value, curently 0-180 degrees corresponds to 0-4 command
 def main():
-    # Initialize kinematics with example arm lengths.
-    # You may need to adjust L1 and L2 based on your actual robotic arm configuration.
-    kin = Kinematics(L1=100, L2=100)  # Example values in your chosen unit
-
-    # Initialize the serial connection to the Arduino.
-    # Update the arduino_port with your actual device identifier.
-    arduino_port = '/dev/tty.usbmodemXXXX'
+    kin = Kinematics(L1=30, L2=25) # Initialize kinematics class with arm lengths (in cm)
+    arduino_port = '/dev/tty.usbmodemXXXX' # Update with the actual port
     baud_rate = 9600
+    arduino_connected = False
     try:
         arduino = serial.Serial(arduino_port, baud_rate, timeout=1)
+        time.sleep(2)
+        arduino.write(b'PC connected to Arduino!\n')
+        arduino_connected = True
+        print("PC connected to Arduino connected!")
     except serial.SerialException as e:
         print("Failed to connect to Arduino:", e)
         return
-
-    time.sleep(2)  # Give Arduino time to reset
-    arduino.write(b'Mac/Arduino connected!\n')
-    print("Arduino connected. Beginning QR scanning...")
-
+    
+    scanner = QRScanner(camera_id=0, width=1280, height=720, position_history_size=15)
+    print("Starting calibration...")
+    print("Place QR code on conveyor belt, then raise it when prompted")
+    calibration = scanner.calibrate(known_qr_size_cm=7, height_difference_cm=10, display=True)
+    if not calibration:
+        print("Calibration failed.")
+        return
+    print("Calibration successful.")
+    
     try:
-        # Run an infinite loop to continuously scan for QR codes.
+        # Main operational loop
         while True:
-            # Call the QR scanner function (which opens the camera, reads a frame,
-            # and returns as soon as a QR is detected)
-            qr_data, qr_bbox = QRScanner.scan_qr_code()
-            if qr_bbox:
-                center = compute_center(qr_bbox)
-                if center:
-                    x, y = center
-                    print(f"QR center: ({x:.2f}, {y:.2f})")
-                    try:
-                        # Use the kinematics solver to compute angles.
-                        theta2 = kin.forward(x, y)
-                        theta1 = kin.inverse(x, y, theta2)
-                        print(f"Computed angles: theta1 = {theta1:.2f}, theta2 = {theta2:.2f}")
-                        
-                        # Format the command string to send to Arduino.
-                        # Here we send the center coordinates and the computed angles.
-                        command = f"{x:.2f},{y:.2f},{theta1:.2f},{theta2:.2f}\n"
-                        arduino.write(command.encode())
-                        print(f"Sent command: {command.strip()}")
-                    except Exception as e:
-                        print("Kinematics computation error:", e)
+            print("\nScanning for QR codes...")
+            results = scanner.scan_and_track(
+                display=True,
+                min_frames=5,
+                reliable_frames=10,
+                min_speed=0.5,
+                max_variance=0.3,
+                max_frames_without_detection=3,
+                calibration=calibration
+            )
+            if not results or not results["qr_data"]:
+                print("No QR code detected. Trying again...")
+                continue
+            print(f"QR Data: {results['qr_data']}")
+            print(f"Speed: {results['speed']} {results['unit']}")
+            if "real_world_speed" in results and results["real_world_speed"] is not None:
+                print(f"Real-world speed: {results['real_world_speed']} cm/frame")
+            if results["final_position"]:
+                pos_x, pos_y = results["final_position"]
+                print(f"Current Position (pixels): ({pos_x:.2f}, {pos_y:.2f})")
+            if "height_above_belt" in results and results["height_above_belt"] is not None:
+                print(f"Height above belt: {results['height_above_belt']:.2f} cm")
+    
+            future_pos = predict_future_position(results, camera_to_robot_distance=30)
+            if future_pos:
+                robot_x_time, robot_y, robot_z = future_pos
+                try:
+                    # Calculate arm angles using kinematics
+                    theta2 = kin.forward(robot_y, robot_z)
+                    theta1 = kin.inverse(robot_y, robot_z, theta2)
+                    theta1_deg = math.degrees(theta1)
+                    theta2_deg = math.degrees(theta2)
+                    print(f"Robot arm angles: θ1={theta1_deg:.2f}°, θ2={theta2_deg:.2f}°")
+                    
+                    # Send command to Arduino (turret_angle, lift1_angle, lift2_angle, servo angle, vacuum on/off)
+                    command = f"0,{theta1_deg:.2f},{theta2_deg:.2f},0,1\n"
+                    arduino.write(command.encode())
+                    print(f"Sent command to Arduino: {command.strip()}")
+                except Exception as e:
+                    print(f"Kinematics calculation error: {e}")
             else:
-                print("No QR detected.")
-
-            # A short delay to avoid overwhelming the camera and Arduino.
-            time.sleep(0.1)
+                print("Unable to predict future position.")
+            time.sleep(2)
     except KeyboardInterrupt:
-        print("Interrupted by user.")
+        print("\nInterrupted by user. Shutting down...")
+    
     finally:
-        arduino.close()
-        print("Arduino connection closed.")
+        if arduino_connected:
+            arduino.close()
+            print("Arduino connection closed.")
 
 if __name__ == "__main__":
     main()
