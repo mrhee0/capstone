@@ -85,16 +85,27 @@ def main():
                 robot_x_time, robot_y, robot_z = future_pos
                 try:
                     # Calculate arm angles using kinematics
-                    theta2 = kin.forward(robot_y, robot_z)
-                    theta1 = kin.inverse(robot_y, robot_z, theta2)
+                    raised_hover_cm = 5
+                    theta2 = kin.forward(robot_y, robot_z+raised_hover_cm)
+                    theta1 = kin.inverse(robot_y, robot_z+raised_hover_cm, theta2)
                     theta1_deg = math.degrees(theta1)
                     theta2_deg = math.degrees(theta2)
                     print(f"Robot arm angles: θ1={theta1_deg:.2f}°, θ2={theta2_deg:.2f}°")
+
+                    theta2_lower = kin.forward(robot_y, robot_z)
+                    theta1_lower = kin.inverse(robot_y, robot_z, theta2)
+                    theta1_deg_lower = math.degrees(theta1)
+                    theta2_deg_lower = math.degrees(theta2)
                     
                     # Send command to Arduino (turret_angle, lift1_angle, lift2_angle, servo angle, vacuum on/off)
-                    command = f"0,{theta1_deg:.2f},{theta2_deg:.2f},0,1\n"
+                    command = f"0,{theta1_deg:.2f},{theta2_deg:.2f},0,0\n"
                     arduino.write(command.encode())
-                    print(f"Sent command to Arduino: {command.strip()}")
+                    print(f"Sent hover command to Arduino: {command.strip()}")
+                    time.sleep(robot_x_time)
+                    
+                    command = f"0,{theta1_deg_lower:.2f},{theta2_deg_lower:.2f},0,1\n"
+                    arduino.write(command.encode())
+                    print(f"Sent pickup command to Arduino: {command.strip()}")
                 except Exception as e:
                     print(f"Kinematics calculation error: {e}")
             else:
