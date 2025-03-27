@@ -90,7 +90,7 @@ class QRScanner:
             direction = None
         return avg_speed_px, direction, "px/frame"
     
-    def calibrate(self, known_qr_size_cm=7, height_difference_cm=None, display=True):
+    def calibrate(self, known_qr_size_cm=7, height_difference_cm=11, display=True):
         """
         Calibrate the system to determine camera distance to conveyor belt and pixel:cm ratio.
         
@@ -115,15 +115,18 @@ class QRScanner:
             return None
         
         calibration_results = {
-            "distance_to_belt_cm": None,
-            "pixels_per_cm": None,
-            "focal_length_px": None
+            "known_qr_size": known_qr_size_cm,
+            "pixels_per_cm_belt": None,
+            "pixels_per_cm_raised": None,
+            "change_in_pixels_per_cm": None,
+            "bot_edge_y": None,
+            "top_edge_y": None
         }
         
-        # Step 1: Measure QR code on the belt
-        belt_measurement = self._capture_qr_measurement(
+        # Step 1: Measure QR code on the close edge of the belt
+        belt_measurement, qr_bbox = self._capture_qr_measurement(
             cap, 
-            "Place QR code on the conveyor belt, then press any key...",
+            "Place QR code on the conveyor belt edge far from the arm, then press any key...",
             "QR on belt",
             display
         )
@@ -133,10 +136,37 @@ class QRScanner:
             print("Failed to detect QR code on the belt")
             return None
         print(f"QR on belt size: {belt_measurement['width']:.2f} x {belt_measurement['height']:.2f} pixels")
+        if qr_bbox and len(qr_bbox) >= 4:
+            sorted_points = sorted(qr_bbox, key=lambda point: point[1])
+            bottommost_points = sorted_points[2:]
+            avg_y = (bottommost_points[0][1] + bottommost_points[1][1]) / 2
+            print(f"Average y-coordinate of bottom-most points: {avg_y:.2f}")
+            calibration_results["bot_edge_y"] = avg_y
+        else:
+            print(len(qr_bbox))
+
+        # Step 2: Measure QR code on the far edge of the belt
+        belt_measurement2, qr_bbox2 = self._capture_qr_measurement(
+            cap, 
+            "Place QR code on the conveyor belt edge close to the arm, then press any key...",
+            "QR on belt",
+            display
+        )
+        if not belt_measurement2:
+            cap.release()
+            cv2.destroyAllWindows()
+            print("Failed to detect QR code on the belt")
+            return None
+        if qr_bbox2 and len(qr_bbox2) >= 4:
+            sorted_points = sorted(qr_bbox2, key=lambda point: point[1])
+            topmost_points = sorted_points[:2]
+            avg_y = (topmost_points[0][1] + topmost_points[1][1]) / 2
+            print(f"Average y-coordinate of top-most points: {avg_y:.2f}")
+            calibration_results["top_edge_y"] = avg_y
         
-        # Step 2: Measure QR code at predefined height above belt
+        # Step 3: Measure QR code at predefined height above belt
         raised_message = f"Raise QR code {height_difference_cm}cm above belt, then press any key..."
-        raised_measurement = self._capture_qr_measurement(
+        raised_measurement, _ = self._capture_qr_measurement(
             cap, 
             raised_message,
             "QR raised",
@@ -152,22 +182,18 @@ class QRScanner:
         if display:
             cv2.destroyAllWindows()
         
-        # Calculate calibration values (pinhole camera model):
+        # Calculate calibration values:
         belt_size_px = (belt_measurement['width'] + belt_measurement['height']) / 2
         raised_size_px = (raised_measurement['width'] + raised_measurement['height']) / 2
-        size_ratio = raised_size_px / belt_size_px
-        distance_to_belt = height_difference_cm / (1 - (belt_size_px/raised_size_px))
-        focal_length = (belt_size_px * distance_to_belt) / known_qr_size_cm
         
-        pixels_per_cm = belt_size_px / known_qr_size_cm
-        calibration_results["distance_to_belt_cm"] = round(distance_to_belt, 2)
-        calibration_results["pixels_per_cm"] = round(pixels_per_cm, 2)
-        calibration_results["focal_length_px"] = round(focal_length, 2)
+        calibration_results["pixels_per_cm_belt"] = belt_size_px / known_qr_size_cm
+        calibration_results["pixels_per_cm_raised"] = raised_size_px / known_qr_size_cm
+        calibration_results["change_in_pixels_per_cm"] = (calibration_results["pixels_per_cm_raised"]-calibration_results["pixels_per_cm_belt"])/height_difference_cm
         
         print("\nCalibration Results:")
-        print(f"Camera distance to conveyor belt: {calibration_results['distance_to_belt_cm']} cm")
-        print(f"Pixel to cm ratio at belt level: {calibration_results['pixels_per_cm']} pixels/cm")
-        print(f"Camera focal length: {calibration_results['focal_length_px']} pixels")
+        print(f"Pixel to cm ratio at belt level: {calibration_results['pixels_per_cm_belt']} pixels/cm")
+        print(f"Pixel to cm ratio at {height_difference_cm}cm raised level: {calibration_results['pixels_per_cm_raised']} pixels/cm")
+        print(f"Change in pixels per cm: {calibration_results['change_in_pixels_per_cm']} pixels/cm")
         return calibration_results
     
     def _capture_qr_measurement(self, cap, prompt_message, window_name, display):
@@ -232,11 +258,11 @@ class QRScanner:
         if not qr_detected:
             print("Could not detect QR code")
             return None
-        return measurement
+        return measurement, qr_bbox
     
     def scan_and_track(self, display=True, exit_key='q', min_frames=10, 
-                      reliable_frames=15, min_speed=0.5, max_variance=0.2,
-                      max_frames_without_detection=3, calibration=None):
+                      reliable_frames=10, min_speed=0.5, max_variance=0.2,
+                      max_frames_without_detection=3, fps=60, calibration=None):
         """
         Scan for QR codes and track their speed, returning once reliable data is collected.
         
@@ -249,6 +275,7 @@ class QRScanner:
             max_variance: Maximum allowed variance in speed measurements
             max_frames_without_detection: Maximum allowed consecutive frames without detection
                                          before resetting the consecutive detection counter
+            fps: Frames per second of camera being used
             calibration: Calibration results from the calibrate() method (optional)
             
         Returns:
@@ -321,18 +348,22 @@ class QRScanner:
                                 "height": round(avg_height, 2),
                                 "area": round(avg_area, 2)
                             }
-                            if calibration and calibration.get("distance_to_belt_cm") and calibration.get("focal_length_px"):
-                                width_cm = avg_width / calibration["pixels_per_cm"]
-                                height_cm = avg_height / calibration["pixels_per_cm"]
-                                results["real_world_size"] = {
-                                    "width": round(width_cm, 2),
-                                    "height": round(height_cm, 2),
-                                    "area": round(width_cm * height_cm, 2)
-                                }
-                                known_qr_size_cm = calibration.get("known_qr_size_cm", width_cm)
-                                qr_avg_size_px = (avg_width + avg_height) / 2
-                                distance_to_qr = (calibration["focal_length_px"] * known_qr_size_cm) / qr_avg_size_px
-                                height_above_belt = calibration["distance_to_belt_cm"] - distance_to_qr
+                            if calibration and calibration.get("pixels_per_cm_belt"):
+                                # width_cm = avg_width / calibration["pixels_per_cm"]
+                                # height_cm = avg_height / calibration["pixels_per_cm"]
+                                # results["real_world_size"] = {
+                                #     "width": round(width_cm, 2),
+                                #     "height": round(height_cm, 2),
+                                #     "area": round(width_cm * height_cm, 2)
+                                # }
+                                # known_qr_size_cm = calibration.get("known_qr_size_cm", width_cm)
+                                # qr_avg_size_px = (avg_width + avg_height) / 2
+                                # distance_to_qr = (calibration["focal_length_px"] * known_qr_size_cm) / qr_avg_size_px
+                                # height_above_belt = calibration["distance_to_belt_cm"] - distance_to_qr
+                                # results["height_above_belt"] = round(height_above_belt, 2)
+                                box_size_px = (avg_width+avg_height)/2
+                                print(f"QR size: {avg_width} x {avg_height} pixels")
+                                height_above_belt = (box_size_px/calibration["known_qr_size"]-calibration["pixels_per_cm_belt"])/calibration["change_in_pixels_per_cm"]
                                 results["height_above_belt"] = round(height_above_belt, 2)
                         if center:
                             self.position_history.append(center)
@@ -342,10 +373,12 @@ class QRScanner:
                                 results["speed"] = round(speed, 2)
                                 results["direction"] = direction
                                 results["unit"] = unit
-                                if calibration and calibration.get("pixels_per_cm"):
-                                    speed_cm = speed / calibration["pixels_per_cm"]
+                                if calibration and calibration.get("pixels_per_cm_belt"):
+                                    box_pixels_per_cm = box_size_px/calibration["known_qr_size"]
+                                    # speed_cm = fps * speed / box_pixels_per_cm
+                                    speed_cm = fps / len(self.position_history) * speed / box_pixels_per_cm
                                     results["real_world_speed"] = round(speed_cm, 2)
-                                    results["real_world_speed_unit"] = "cm/frame"
+                                    results["real_world_speed_unit"] = "cm/s"
                                 speed_measurements.append(speed)
                                 if len(speed_measurements) > reliable_frames:
                                     speed_measurements.pop(0)

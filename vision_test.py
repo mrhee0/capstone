@@ -8,7 +8,7 @@ if __name__ == "__main__":
 
     # Calibrate the QR height/size
     calibration = None
-    calibration = scanner.calibrate(known_qr_size_cm=7, height_difference_cm=12)
+    calibration = scanner.calibrate(known_qr_size_cm=7, height_difference_cm=11)
 
     results = scanner.scan_and_track(
         display=True,
