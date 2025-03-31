@@ -7,7 +7,7 @@ from vision import QRScanner
 import numpy as np
 import cv2
 
-def predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offset=2, calibration=None):
+def predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offset=13, calibration=None):
     """
     Predict where the QR code will be after a specified time.
     
@@ -32,7 +32,7 @@ def predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offse
 # Send 5 comma-separated commands (turret angle, lift1 angle, lift2 angle, servo (never changed), vacuum)
 # Changes: don't send servo value, curently 0-180 degrees corresponds to 0-4 command
 def main():
-    kin = Kinematics(L1=30, L2=25) # Initialize kinematics class with arm lengths (in cm)
+    kin = Kinematics(L1=20, L2=20) # Initialize kinematics class with arm lengths (in cm)
     arduino_port = '/dev/tty.usbmodem2101'
     baud_rate = 9600
     arduino_connected = False
@@ -44,7 +44,8 @@ def main():
         arduino_connected = True
         print("PC connected to Arduino!")
         time.sleep(2)
-        command = f"2,2,2,0,0\n"
+        # default position (arbitrary)
+        command = f"3,2,1,0,0\n"
         arduino.write(command.encode())
         print(f"Sent default command to Arduino: {command.strip()}")
     except serial.SerialException as e:
@@ -88,7 +89,7 @@ def main():
             if "height_above_belt" in results and results["height_above_belt"] is not None:
                 print(f"Height above belt: {results['height_above_belt']:.2f} cm")
     
-            future_pos = predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offset=2, calibration=calibration)
+            future_pos = predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offset=13, calibration=calibration)
             if future_pos:
                 robot_x_time, robot_y, robot_z = future_pos
                 try:
@@ -96,40 +97,49 @@ def main():
                     raised_hover_cm = 5
                     print(robot_y,robot_z+raised_hover_cm)
                     print(robot_x_time)
-                    # theta2 = kin.forward(robot_y, robot_z+raised_hover_cm)
-                    # theta1 = kin.inverse(robot_y, robot_z+raised_hover_cm, theta2)
-                    # theta1_deg = math.degrees(theta1)
-                    # theta2_deg = math.degrees(theta2)
-                    # print(f"Robot arm hover angles: θ1={theta1_deg:.2f}°, θ2={theta2_deg:.2f}°")
+                    theta2 = kin.forward(robot_y, robot_z+raised_hover_cm)
+                    theta1 = kin.inverse(robot_y, robot_z+raised_hover_cm, theta2)
+                    theta1_deg = math.degrees(theta1)
+                    theta2_deg = math.degrees(theta2)
+                    print(f"Robot arm hover angles: θ1={theta1_deg:.2f}°, θ2={theta2_deg:.2f}°")
 
-                    # theta2_lower = kin.forward(robot_y, robot_z)
-                    # theta1_lower = kin.inverse(robot_y, robot_z, theta2)
-                    # theta1_deg_lower = math.degrees(theta1)
-                    # theta2_deg_lower = math.degrees(theta2)
-                    # print(f"Robot arm grab angles: θ1={theta1_deg_lower:.2f}°, θ2={theta2_deg_lower:.2f}°")
+                    theta2_lower = kin.forward(robot_y, robot_z)
+                    theta1_lower = kin.inverse(robot_y, robot_z, theta2)
+                    theta1_deg_lower = math.degrees(theta1_lower)
+                    theta2_deg_lower = math.degrees(theta2_lower)
+                    print(f"Robot arm grab angles: θ1={theta1_deg_lower:.2f}°, θ2={theta2_deg_lower:.2f}°")
 
-                    # Convert from degrees to voltage (0-5), lift2 actuator is inverted
-                    # theta1_command = theta1_deg*5/180
-                    # theta2_command = 5 - theta2_deg*5/180
-                    # theta1_command_lower = theta1_deg_lower*5/180
-                    # theta2_command_lower = 5 - theta2_deg_lower*5/180
+                    if theta1_deg<0:
+                        theta1_deg+=180
+                    elif theta2_deg<0:
+                        theta2_deg+=180
+                    if theta1_deg_lower<0:
+                        theta1_deg_lower+=180
+                    elif theta2_deg_lower<0:
+                        theta2_deg_lower+=180
+
+                    # Convert from degrees to voltage (0-5), lift2 actuator is inverted and goes from 0-4
+                    theta1_command = theta1_deg*5/180
+                    theta2_command = 4 - theta2_deg*4/180
+                    theta1_command_lower = theta1_deg_lower*5/180
+                    theta2_command_lower = 4 - theta2_deg_lower*4/180
                     
                     # Send command to Arduino (lift1_angle, lift2_angle, turret, servo angle, vacuum on/off)
-                    # command = f"{theta1_command:.2f},{theta2_command:.2f},1,0,0\n"
-                    command = f"4.1,2,1,0,1\n"
+                    command = f"{theta1_command:.2f},{theta2_command:.2f},1,0,0\n"
+                    # command = f"4.1,2,1,0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent hover command to Arduino: {command.strip()}")
                     # time.sleep(robot_x_time)
                     time.sleep(.2)
                     
-                    # command = f"{theta1_command_lower:.2f},{theta2_command_lower:.2f},1,0,1\n"
-                    command = f"4.2,1.8,1,0,1\n"
+                    command = f"{theta1_command_lower:.2f},{theta2_command_lower:.2f},1,0,1\n"
+                    # command = f"4.2,1.8,1,0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent pickup command to Arduino: {command.strip()}")
                     time.sleep(.3)
 
-                    # command = f"{theta1_command:.2f},{theta2_command:.2f},1,0,1\n"
-                    command = f"4,2.1,1,0,1\n"
+                    command = f"{theta1_command:.2f},{theta2_command:.2f},1,0,1\n"
+                    # command = f"4,2.1,1,0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent lift command to Arduino: {command.strip()}")
                 except Exception as e:
