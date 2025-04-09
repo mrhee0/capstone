@@ -14,10 +14,18 @@ def try_connect_serial():
     try:
         if ser is not None:
             ser.close()
-        ser = serial.Serial('/dev/cu.debug-console', 115200, timeout=1)
+        ser = serial.Serial('/dev/cu.usbmodem1101', 115200, timeout=1)
         return True
     except:
         return False
+
+def getTheta1(v1):
+    """Convert voltage back to theta1 angle"""
+    return (v1 * 360 / 5) - 25
+
+def getTheta2(v2):
+    """Convert voltage back to theta2 angle"""
+    return 160 - (v2 * 360 / 5)
 
 def inverse_kinematics(x, y):
     """ Solves the inverse kinematics for the two-link arm """
@@ -79,12 +87,27 @@ class TwoLinkArmApp:
         position_frame.pack(pady=5, padx=10, fill='x')
         self.position_label = tk.Label(position_frame, text="Position: ", font=('Courier', 12), bg='#FFE0B2')
         self.position_label.pack(pady=5)
+        
+        # Create angle display frame
+        angle_frame = tk.LabelFrame(root, text='Joint Angles', bg='#FFE0B2', fg='#1976D2')
+        angle_frame.pack(pady=5, padx=10, fill='x')
+        self.angle_label = tk.Label(angle_frame, text="Angles: ", font=('Courier', 12), bg='#FFE0B2', fg='#1976D2')
+        self.angle_label.pack(pady=5)
 
         # Create command preview frame
         command_frame = tk.LabelFrame(root, text='Command Preview', bg='#FFE0B2', fg='#E65100')
         command_frame.pack(pady=5, padx=10, fill='x')
         self.command_label = tk.Label(command_frame, text="Command: ", font=('Courier', 12), bg='#FFE0B2')
         self.command_label.pack(pady=5)
+        
+        # Create Arduino feedback frame
+        feedback_frame = tk.LabelFrame(root, text='Arduino Feedback', bg='#FFE0B2', fg='#2E7D32')
+        feedback_frame.pack(pady=5, padx=10, fill='x')
+        self.feedback_label = tk.Label(feedback_frame, text="Waiting for feedback...", font=('Courier', 12), bg='#FFE0B2', fg='#2E7D32')
+        self.feedback_label.pack(pady=5)
+        
+        # Start checking for Arduino feedback
+        self.root.after(1, self.check_arduino_feedback)
         
         # Bind mouse events for clock hand dragging
         self.horiz_canvas.bind('<Button-1>', self.start_clock_drag)
@@ -131,8 +154,9 @@ class TwoLinkArmApp:
         self.disable_button = tk.Button(enable_frame, text='Disable System', command=self.disable_system, bg='#E57373', state='disabled')
         self.disable_button.pack(side='left', padx=5)
         
-        # Try initial connection
+        # Try initial connection and start auto-reconnect
         self.try_connect()
+        self.root.after(500, self.auto_reconnect)
         self.canvas.bind("<B1-Motion>", self.drag)
         self.draw_arm()
         
@@ -144,13 +168,13 @@ class TwoLinkArmApp:
         angles = inverse_kinematics(x, y)
         if angles:
             self.theta1, self.theta2 = angles
-            if self.theta1 > 90 and self.theta2 > 60:
-                self.v1 = ((self.theta1 + 15) / 180) * 5
-                self.v2 = ((150 - self.theta2) / 180) * 5
-                self.update_command()
-                self.draw_arm()
-                if self.send_on_modify:
-                    self.send_position()
+            self.v1 = ((self.theta1 + 25) / 360 ) * 5.3
+            self.v2 = ((155 - self.theta2) / 360) * 5
+            self.update_command()
+            self.draw_arm()
+            if self.send_on_modify:
+                self.send_position()
+                    
     
     def draw_arm(self, x1=None, y1=None, x2=None, y2=None, x3=None, y3=None):
         """Draw the robotic arm and environment on the canvas.
@@ -165,7 +189,7 @@ class TwoLinkArmApp:
         
         # Draw environment elements
         # Target zone (grey rectangle)
-        self.canvas.create_rectangle(100, 400, 200, 500, 
+        self.canvas.create_rectangle(100, 450, 200, 500, 
                                    fill='#E0E0E0', outline='#BDBDBD')
         # Wall and area below
         self.canvas.create_rectangle(0, wall_y, 800, 800, 
@@ -219,10 +243,14 @@ class TwoLinkArmApp:
         # Update position display
         position_text = f"Link 3 Tip Position:\n  X: {- x3:>6.1f}\n  Y: {y3:>6.1f}"
         self.position_label.config(text=position_text)
+        
+        # Update angle display
+        angle_text = f"Joint Angles:\n  θ₁: {self.theta1:>6.1f}°\n  θ₂: {getTheta2(self.v2):>6.1f}°"
+        self.angle_label.config(text=angle_text)
 
         # Calculate voltages from angles
-        self.v1 = ((self.theta1 + 15) / 180) * 5
-        self.v2 = ((150 - self.theta2) / 180) * 5  # Flipped voltage scaling
+        self.v1 = ((self.theta1 + 25) / 360 ) * 5.3
+        self.v2 = ((155 - self.theta2) / 360) * 5  # Flipped voltage scaling
         
         # Update clock display if not locked
         if not self.horiz_angle_locked:
@@ -254,10 +282,18 @@ class TwoLinkArmApp:
         labeled_command = f"Command Values:\n  Angle1: {self.v1:.2f}V ({self.theta1:.1f}°)\n  Angle2: {self.v2:.2f}V ({self.theta2:.1f}°)\n  Link3: {self.v3:.1f}V\n  Value 4: {self.value4}°\n  Vacuum: {self.vacuum_state} ({'ON' if self.vacuum_state else 'OFF'})"
         self.command_label.config(text=labeled_command)
     
-    def send_position(self):
-        command = f"{self.v1:.2f},{self.v2:.2f},{self.v3:.2f},{self.value4},{self.vacuum_state}\n"
-        print(f"Sending command: {command}")
-        ser.write(command.encode())
+    
+        
+    def check_arduino_feedback(self):
+        """Check for and display Arduino's serial feedback"""
+        if ser and ser.in_waiting:
+            try:
+                feedback = ser.readline().decode().strip()
+                if feedback.startswith("Angles"):
+                    self.feedback_label.config(text=feedback)
+            except:
+                pass  # Ignore any decoding errors
+        self.root.after(100, self.check_arduino_feedback)
     
     def _v3_to_angle(self, v3):
         # Convert v3 (0-5) to angle (180-0)
@@ -430,12 +466,19 @@ class TwoLinkArmApp:
             self.connect_button.configure(text='Reconnect')
             self.enable_button.configure(state='normal')
             self.disable_button.configure(state='normal')
+            return True
         else:
             self.status_indicator.configure(bg='#E57373')  # Red
             self.status_label.configure(text='Disconnected')
             self.connect_button.configure(text='Connect')
             self.enable_button.configure(state='disabled')
             self.disable_button.configure(state='disabled')
+            return False
+            
+    def auto_reconnect(self):
+        """Automatically try to reconnect every 0.5 seconds if not connected"""
+        self.try_connect()
+        self.root.after(500, self.auto_reconnect)
     
     def send_position(self):
         if ser is None:
@@ -446,6 +489,7 @@ class TwoLinkArmApp:
             command = f"{self.v1:.2f},{self.v2:.2f},{self.v3:.2f},{self.value4},{self.vacuum_state}\n"
             print(f"Sending command: {command}")
             ser.write(command.encode())
+            try_connect_serial()
         except:
             print("Failed to send command - connection lost")
             self.try_connect()  # Try to reconnect
