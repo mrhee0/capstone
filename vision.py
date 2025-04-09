@@ -183,7 +183,7 @@ class QRScanner:
             cv2.destroyAllWindows()
         
         # Calculate calibration values:
-        belt_size_px = (belt_measurement['width'] + belt_measurement['height']) / 2
+        belt_size_px = (belt_measurement['width'] + belt_measurement['height']+ 3) / 2
         raised_size_px = (raised_measurement['width'] + raised_measurement['height']) / 2
         
         calibration_results["pixels_per_cm_belt"] = belt_size_px / known_qr_size_cm
@@ -366,6 +366,7 @@ class QRScanner:
                                 height_above_belt = (box_size_px/calibration["known_qr_size"]-calibration["pixels_per_cm_belt"])/calibration["change_in_pixels_per_cm"]
                                 results["height_above_belt"] = round(height_above_belt, 2)
                         if center:
+                            results["height_above_belt"] += (8*(800-center[1])/800) - 4
                             self.position_history.append(center)
                             self.timestamp_history.append(current_time)
                             if len(self.position_history) >= min_frames:
@@ -373,12 +374,12 @@ class QRScanner:
                                 results["speed"] = round(speed, 2)
                                 results["direction"] = direction
                                 results["unit"] = unit
-                                if calibration and calibration.get("pixels_per_cm_belt"):
-                                    box_pixels_per_cm = box_size_px/calibration["known_qr_size"]
-                                    # speed_cm = fps * speed / box_pixels_per_cm
-                                    speed_cm = fps / len(self.position_history) * speed / box_pixels_per_cm
-                                    results["real_world_speed"] = round(speed_cm, 2)
-                                    results["real_world_speed_unit"] = "cm/s"
+                                # if calibration and calibration.get("pixels_per_cm_belt") and len(self.timestamp_history) > 1:
+                                #     box_pixels_per_cm = box_size_px/calibration["known_qr_size"]
+                                #     # speed_cm = fps * speed / box_pixels_per_cm
+                                #     speed_cm = fps / (self.timestamp_history[-1]-self.timestamp_history[0]) * speed / box_pixels_per_cm
+                                #     results["real_world_speed"] = round(speed_cm, 2)
+                                #     results["real_world_speed_unit"] = "cm/s"
                                 speed_measurements.append(speed)
                                 if len(speed_measurements) > reliable_frames:
                                     speed_measurements.pop(0)
@@ -460,6 +461,12 @@ class QRScanner:
                             
                             # Return once stable tracking is achieved
                             if tracking_stable:
+                                if calibration and calibration.get("pixels_per_cm_belt"):
+                                    box_pixels_per_cm = box_size_px/calibration["known_qr_size"]
+                                    # speed_cm = fps * speed / box_pixels_per_cm
+                                    speed_cm = (abs(self.position_history[-1][0]-self.position_history[0][0])+abs(self.position_history[-1][1]-self.position_history[0][1])) / (self.timestamp_history[-1]-self.timestamp_history[0]) / box_pixels_per_cm
+                                    results["real_world_speed"] = round(speed_cm, 2)
+                                    results["real_world_speed_unit"] = "cm/s"
                                 if display:
                                     frame_copy = frame.copy()
                                     cv2.putText(frame_copy, "TRACKING STABLE - RETURNING", (30, 120), 
