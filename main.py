@@ -113,12 +113,12 @@ def main():
                     print(f"Robot arm grab angles: θ1={theta1_deg_lower:.2f}°, θ2={theta2_deg_lower:.2f}°")
 
                     # Convert from degrees to voltage (0-5), lift2 actuator is inverted and goes from 0-4
-                    theta1_command = ((theta1_deg+25) / 360) * 5.3
-                    theta2_command = ((155-theta2_deg) / 360) * 5
-                    theta1_command_lower = ((theta1_deg_lower+25) / 360) * 5.3
-                    theta2_command_lower = ((155-theta2_deg_lower) / 360) * 5
-                    theta1_command_raised = ((theta1_deg_raised+25) / 360) * 5.3
-                    theta2_command_raised = ((155-theta2_deg_raised) / 360) * 5
+                    theta1_command = ((theta1_deg+12) / 360) * 5
+                    theta2_command = ((170-theta2_deg) / 360) * 5
+                    theta1_command_lower = ((theta1_deg_lower+12) / 360) * 5
+                    theta2_command_lower = ((170-theta2_deg_lower) / 360) * 5
+                    theta1_command_raised = ((theta1_deg_raised+12) / 360) * 5
+                    theta2_command_raised = ((170-theta2_deg_raised) / 360) * 5
                     
                     bin1_x = 10
                     bin2_x = 20
@@ -128,8 +128,8 @@ def main():
                         bin_deg1, bin_deg2 = kin.inverse_kinematics(bin1_x, bin_hover_y)
                     else:
                         bin_deg1, bin_deg2 = kin.inverse_kinematics(bin2_x, bin_hover_y)
-                    theta1_command_bin = ((bin_deg1+25) / 360) * 5.3
-                    theta2_command_bin = ((155-bin_deg2) / 360) * 5
+                    theta1_command_bin = ((bin_deg1+12) / 360) * 5
+                    theta2_command_bin = ((170-bin_deg2) / 360) * 5
 
                     # Send command to Arduino (lift1_angle, lift2_angle, turret, servo angle, vacuum on/off)
                     command = f"{theta1_command:.2f},{theta2_command:.2f},1,0,0\n"
