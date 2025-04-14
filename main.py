@@ -32,13 +32,8 @@ def predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offse
 # Send 5 comma-separated commands (turret angle, lift1 angle, lift2 angle, servo (never changed), vacuum)
 # Changes: don't send servo value, curently 0-180 degrees corresponds to 0-4 command
 def main():
-<<<<<<< Updated upstream
     kin = Kinematics(L1=20, L2=20) # Initialize kinematics class with arm lengths (in cm)
     arduino_port = '/dev/tty.usbmodem101'
-=======
-    kin = Kinematics(L1=30, L2=25) # Initialize kinematics class with arm lengths (in cm)
-    arduino_port = '/dev/cu.usbserial-0001' # Update with the actual port
->>>>>>> Stashed changes
     baud_rate = 9600
     arduino_connected = False
     try:
