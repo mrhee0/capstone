@@ -29,11 +29,19 @@ def predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offse
     print("Cannot predict real-world position: calibration data missing")
     return None
 
+def l1_deg_to_voltage(degree):
+    # Convert from degrees (0-360) to voltage (0-5) for lift1
+    return ((degree+12) / 360) * 5
+
+def l2_deg_to_voltage(degree):
+    # Convert from degrees (0-360) to voltage (0-5) for lift2
+    return ((170-degree) / 360) * 5
+
 # Send 5 comma-separated commands (turret angle, lift1 angle, lift2 angle, servo (never changed), vacuum)
 # Changes: don't send servo value, curently 0-180 degrees corresponds to 0-4 command
 def main():
     kin = Kinematics(L1=20, L2=20) # Initialize kinematics class with arm lengths (in cm)
-    arduino_port = '/dev/tty.usbmodem101'
+    arduino_port = '/dev/tty.usbmodem2101'
     baud_rate = 9600
     arduino_connected = False
     try:
@@ -45,8 +53,7 @@ def main():
         print("PC connected to Arduino!")
         time.sleep(2)
         # default position (arbitrary)
-        default_command = f"1.9,1.3,1,0,0\n"
-        arduino.write(default_command.encode())
+        default_command = f"1.55,1.45,1,0,0\n"
         arduino.write(default_command.encode())
         print(f"Sent default command to Arduino: {default_command.strip()}")
     except serial.SerialException as e:
@@ -100,6 +107,10 @@ def main():
                     raised_hover_cm = 5
                     print(robot_y,robot_z)
                     print(robot_x_time)
+                    if robot_x_time>1:
+                        robot_x_time /= 2
+                    elif robot_x_time>.7:
+                        robot_x_time /= 1.5
 
                     theta1_deg, theta2_deg = kin.inverse_kinematics(robot_y, robot_z+raised_hover_cm)
                     theta1_deg_lower, theta2_deg_lower = kin.inverse_kinematics(robot_y, robot_z)
@@ -108,12 +119,12 @@ def main():
                     print(f"Robot arm grab angles: θ1={theta1_deg_lower:.2f}°, θ2={theta2_deg_lower:.2f}°")
 
                     # Convert from degrees to voltage (0-5), lift2 actuator is inverted and goes from 0-4
-                    theta1_command = ((theta1_deg+12) / 360) * 5
-                    theta2_command = ((170-theta2_deg) / 360) * 5
-                    theta1_command_lower = ((theta1_deg_lower+12) / 360) * 5
-                    theta2_command_lower = ((170-theta2_deg_lower) / 360) * 5
-                    theta1_command_raised = ((theta1_deg_raised+12) / 360) * 5
-                    theta2_command_raised = ((170-theta2_deg_raised) / 360) * 5
+                    theta1_command = l1_deg_to_voltage(theta1_deg)
+                    theta2_command = l2_deg_to_voltage(theta2_deg)
+                    theta1_command_lower = l1_deg_to_voltage(theta1_deg_lower)
+                    theta2_command_lower = l2_deg_to_voltage(theta2_deg_lower)
+                    theta1_command_raised = l1_deg_to_voltage(theta1_deg_raised)
+                    theta2_command_raised = l2_deg_to_voltage(theta2_deg_raised)
                     
                     bin1_x = 10
                     bin2_x = 20
@@ -123,16 +134,17 @@ def main():
                         bin_deg1, bin_deg2 = kin.inverse_kinematics(bin1_x, bin_hover_y)
                     else:
                         bin_deg1, bin_deg2 = kin.inverse_kinematics(bin2_x, bin_hover_y)
-                    theta1_command_bin = ((bin_deg1+12) / 360) * 5
-                    theta2_command_bin = ((170-bin_deg2) / 360) * 5
+
+                    theta1_command_bin = l1_deg_to_voltage(bin_deg1)
+                    theta2_command_bin = l2_deg_to_voltage(bin_deg2)
 
                     # Send command to Arduino (lift1_angle, lift2_angle, turret, servo angle, vacuum on/off)
                     command = f"{theta1_command:.2f},{theta2_command:.2f},1,0,0\n"
                     # command = f"4.1,2,1,0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent hover command to Arduino: {command.strip()}")
-                    # time.sleep(robot_x_time)
-                    time.sleep(.7)
+                    time.sleep(robot_x_time)
+                    # time.sleep(.7)
                     
                     command = f"{theta1_command_lower:.2f},{theta2_command_lower:.2f},1,0,1\n"
                     # command = f"4.2,1.8,1,0,1\n"
