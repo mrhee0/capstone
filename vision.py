@@ -367,6 +367,8 @@ class QRScanner:
                                 results["height_above_belt"] = round(height_above_belt, 2)
                         if center:
                             results["height_above_belt"] += (8*(800-center[1])/800) - 4
+                            if results["height_above_belt"] < 0:
+                                results["height_above_belt"] = 4
                             self.position_history.append(center)
                             self.timestamp_history.append(current_time)
                             if len(self.position_history) >= min_frames:

@@ -31,19 +31,22 @@ def predict_future_position(results, camera_to_robot_distance_x=3, robot_y_offse
 
 def l1_deg_to_voltage(degree):
     # Convert from degrees (0-360) to voltage (0-5) for lift1
-    return ((degree+12) / 360) * 5
+    return round(((degree+12) / 360) * 5,2)
 
 def l2_deg_to_voltage(degree):
     # Convert from degrees (0-360) to voltage (0-5) for lift2
-    return ((170-degree) / 360) * 5
+    return round(((170-degree) / 360) * 5,2)
 
 # Send 5 comma-separated commands (turret angle, lift1 angle, lift2 angle, servo (never changed), vacuum)
 # Changes: don't send servo value, curently 0-180 degrees corresponds to 0-4 command
 def main():
     kin = Kinematics(L1=20, L2=20) # Initialize kinematics class with arm lengths (in cm)
     arduino_port = '/dev/tty.usbmodem2101'
-    baud_rate = 9600
+    baud_rate = 115200
     arduino_connected = False
+    turret_voltage_straight = .2
+    l1_voltage_default = l1_deg_to_voltage(108)
+    l2_voltage_default = l2_deg_to_voltage(78)
     try:
         arduino = serial.Serial(arduino_port, baud_rate, timeout=1)
         time.sleep(2)
@@ -53,7 +56,7 @@ def main():
         print("PC connected to Arduino!")
         time.sleep(2)
         # default position (arbitrary)
-        default_command = f"1.55,1.45,1,0,0\n"
+        default_command = f"{l1_voltage_default},{l2_voltage_default},{turret_voltage_straight},0,0\n"
         arduino.write(default_command.encode())
         print(f"Sent default command to Arduino: {default_command.strip()}")
     except serial.SerialException as e:
@@ -107,6 +110,8 @@ def main():
                     raised_hover_cm = 5
                     print(robot_y,robot_z)
                     print(robot_x_time)
+
+                    # Wait time normalization
                     if robot_x_time>1:
                         robot_x_time /= 2
                     elif robot_x_time>.7:
@@ -126,49 +131,50 @@ def main():
                     theta1_command_raised = l1_deg_to_voltage(theta1_deg_raised)
                     theta2_command_raised = l2_deg_to_voltage(theta2_deg_raised)
                     
-                    bin1_x = 10
-                    bin2_x = 20
+                    bin_x = 20
                     bin_hover_y = 10
-                    bin_deg1, bin_deg2 = None, None
+                    bin_deg1, bin_deg2 = kin.inverse_kinematics(bin_x, bin_hover_y)
+                    turret_voltage_bin = None
                     if int(results["qr_data"])%2 == 0:
-                        bin_deg1, bin_deg2 = kin.inverse_kinematics(bin1_x, bin_hover_y)
+                        turret_voltage_bin = 1.8
                     else:
-                        bin_deg1, bin_deg2 = kin.inverse_kinematics(bin2_x, bin_hover_y)
+                        turret_voltage_bin = 2.2
 
                     theta1_command_bin = l1_deg_to_voltage(bin_deg1)
                     theta2_command_bin = l2_deg_to_voltage(bin_deg2)
 
                     # Send command to Arduino (lift1_angle, lift2_angle, turret, servo angle, vacuum on/off)
-                    command = f"{theta1_command:.2f},{theta2_command:.2f},1,0,0\n"
+                    command = f"{theta1_command:.2f},{theta2_command:.2f},{turret_voltage_straight},0,0\n"
                     # command = f"4.1,2,1,0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent hover command to Arduino: {command.strip()}")
                     time.sleep(robot_x_time)
                     # time.sleep(.7)
                     
-                    command = f"{theta1_command_lower:.2f},{theta2_command_lower:.2f},1,0,1\n"
+                    command = f"{theta1_command_lower:.2f},{theta2_command_lower:.2f},{turret_voltage_straight},0,1\n"
                     # command = f"4.2,1.8,1,0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent pickup command to Arduino: {command.strip()}")
                     time.sleep(.7)
 
-                    command = f"{theta1_command_raised:.2f},{theta2_command_raised:.2f},1,0,1\n"
+                    command = f"{theta1_command_raised:.2f},{theta2_command_raised:.2f},{turret_voltage_straight},0,1\n"
                     # command = f"4,2.1,1,0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent lift command to Arduino: {command.strip()}")
                     time.sleep(1)
 
-                    command = f"{theta1_command_bin:.2f},{theta2_command_bin:.2f},3,0,1\n"
+                    command = f"{theta1_command_bin:.2f},{theta2_command_bin:.2f},{turret_voltage_bin},0,1\n"
                     arduino.write(command.encode())
                     print(f"Sent bin command to Arduino: {command.strip()}")
                     time.sleep(3)
 
-                    command = f"{theta1_command_bin:.2f},{theta2_command_bin:.2f},3,0,0\n"
+                    command = f"{theta1_command_bin:.2f},{theta2_command_bin:.2f},{turret_voltage_bin},0,0\n"
                     arduino.write(command.encode())
                     print(f"Sent bin drop command to Arduino: {command.strip()}")
                     time.sleep(.5)
 
-                    arduino.write(default_command.encode())
+                    command = default_command
+                    arduino.write(command.encode())
                     print(f"Sent default command to Arduino: {command.strip()}")
 
                 except Exception as e:
