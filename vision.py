@@ -366,7 +366,7 @@ class QRScanner:
                                 height_above_belt = (box_size_px/calibration["known_qr_size"]-calibration["pixels_per_cm_belt"])/calibration["change_in_pixels_per_cm"]
                                 results["height_above_belt"] = round(height_above_belt, 2)
                         if center:
-                            results["height_above_belt"] += (8*(800-center[1])/800) - 4
+                            # results["height_above_belt"] += (8*(800-center[1])/800) - 4
                             if results["height_above_belt"] < 0:
                                 results["height_above_belt"] = 4
                             self.position_history.append(center)
