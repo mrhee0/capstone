@@ -116,6 +116,7 @@ class QRScanner:
         
         calibration_results = {
             "known_qr_size": known_qr_size_cm,
+            "height_difference": height_difference_cm,
             "pixels_per_cm_belt": None,
             "pixels_per_cm_raised": None,
             "change_in_pixels_per_cm": None,
@@ -253,7 +254,7 @@ class QRScanner:
                 cv2.putText(frame, "Searching for QR code...", (30, 60), 
                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
                 cv2.imshow(window_name, frame)
-                cv2.waitKey(1)
+                cv2.waitKey(2)
             attempts += 1
         if not qr_detected:
             print("Could not detect QR code")
@@ -364,6 +365,8 @@ class QRScanner:
                                 box_size_px = (avg_width+avg_height)/2
                                 print(f"QR size: {avg_width} x {avg_height} pixels")
                                 height_above_belt = (box_size_px/calibration["known_qr_size"]-calibration["pixels_per_cm_belt"])/calibration["change_in_pixels_per_cm"]
+                                # if height_above_belt > calibration["height_difference"]:
+                                #     height_above_belt = (height_above_belt+calibration["height_difference"])/2
                                 results["height_above_belt"] = round(height_above_belt, 2)
                         if center:
                             # results["height_above_belt"] += (8*(800-center[1])/800) - 4
@@ -466,7 +469,7 @@ class QRScanner:
                                 if calibration and calibration.get("pixels_per_cm_belt"):
                                     box_pixels_per_cm = box_size_px/calibration["known_qr_size"]
                                     # speed_cm = fps * speed / box_pixels_per_cm
-                                    speed_cm = (abs(self.position_history[-1][0]-self.position_history[0][0])+abs(self.position_history[-1][1]-self.position_history[0][1])) / (self.timestamp_history[-1]-self.timestamp_history[0]) / box_pixels_per_cm
+                                    speed_cm = (abs(self.position_history[-1][0]-self.position_history[0][0])+abs(self.position_history[-1][1]-self.position_history[0][1])) / (self.timestamp_history[-1]-self.timestamp_history[0]) / box_pixels_per_cm - (results["height_above_belt"]/3)
                                     results["real_world_speed"] = round(speed_cm, 2)
                                     results["real_world_speed_unit"] = "cm/s"
                                 if display:

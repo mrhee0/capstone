@@ -20,8 +20,30 @@ class Kinematics:
         angle1 = math.atan2(y, x) - math.atan2(k2, k1)
         
         return math.degrees(angle1), math.degrees(angle2)
+    
+    def forward_kinematics(self, angle1_deg, angle2_deg):
+        """
+        Calculate the end-effector position (x, y) from joint angles.
+        
+        Args:
+            angle1_deg: Angle of first joint in degrees (from negative x-axis)
+            angle2_deg: Angle of second joint in degrees (relative to first link)
+        
+        Returns:
+            Tuple (x, y) representing the end-effector position
+        """
+        angle1 = math.radians(angle1_deg)
+        angle2 = math.radians(angle2_deg)
+        x1 = self.L1 * math.cos(angle1)
+        y1 = self.L1 * math.sin(angle1)
+        
+        absolute_angle2 = angle1 + angle2
+        x2 = x1 + self.L2 * math.cos(absolute_angle2)
+        y2 = y1 + self.L2 * math.sin(absolute_angle2)
+        
+        return -x2, y2
 
 # k = Kinematics(20,20)
-# t1,t2=k.inverse_kinematics(20,15)
+# t1,t2=k.forward_kinematics(100,101)
 # print(t1)
 # print(t2)
